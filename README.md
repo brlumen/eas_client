@@ -1,22 +1,29 @@
 # eas_client
 
 Dart implementation of the Microsoft Exchange ActiveSync (EAS) protocol client.
-Supports WBXML codec, email/contacts/calendar sync, push notifications, and Autodiscover.
+Supports WBXML codec, email/contacts/calendar/tasks sync, push notifications, and Autodiscover.
 
 > **Alpha release.** The API is unstable and may change without notice.
 > Use at your own risk in production environments.
 
 ## Features
 
-- **WBXML codec** — WAP-192 encoding/decoding with 18 EAS code pages
+- **WBXML codec** — WAP-192 encoding/decoding with 22 EAS code pages
 - **Autodiscover** — automatic server discovery by email (MS-OXDISCO)
 - **Provisioning** — security policy negotiation (MS-ASPROV)
-- **Sync** — folder and item synchronization (email, contacts, calendar, tasks)
+- **Sync** — folder and item synchronization (email, contacts, calendar, tasks, notes)
 - **Ping** — push notifications via long-poll (MS-ASCMD)
 - **SendMail** — send email through EAS
+- **SmartReply / SmartForward** — reply/forward with server-side original body
+- **MeetingResponse** — accept, tentatively accept, or decline meeting invitations
 - **Search** — server-side mailbox search
 - **MoveItems** — move items between folders
-- **ItemOperations** — fetch full message body and attachments
+- **ItemOperations** — fetch full message body, attachments, and empty folders
+- **FolderCreate / FolderDelete / FolderUpdate** — folder management
+- **GetItemEstimate** — count items before sync
+- **Settings** — get/set OOF (out-of-office), send device information
+- **ResolveRecipients** — resolve email addresses to contact info
+- **ValidateCert** — S/MIME certificate validation
 
 ## Quick start
 
@@ -56,8 +63,67 @@ final inboxId = folders.addedFolders
     .serverId;
 final emails = await client.fullSync(inboxId);
 
+// Sync calendar
+final calendarId = folders.addedFolders
+    .firstWhere((f) => f.type == EasFolderType.defaultCalendar)
+    .serverId;
+final events = await client.fullSyncCalendar(calendarId);
+
+// Sync tasks
+final tasksId = folders.addedFolders
+    .firstWhere((f) => f.type == EasFolderType.defaultTasks)
+    .serverId;
+final tasks = await client.fullSyncTasks(tasksId);
+
+// Sync contacts
+final contactsId = folders.addedFolders
+    .firstWhere((f) => f.type == EasFolderType.defaultContacts)
+    .serverId;
+final contacts = await client.fullSyncContacts(contactsId);
+
+// Get OOF status
+final settings = await client.getSettings();
+print(settings.oof?.state);
+
 client.dispose();
 ```
+
+## Protocol coverage
+
+Coverage by [MS-ASCMD](https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-ascmd/) commands:
+
+| Command | Status | Notes |
+|---------|--------|-------|
+| Autodiscover | ✅ | MS-OXDISCO; steps 1, 2, 4 (HTTP step 3 intentionally excluded — see below) |
+| OPTIONS | ✅ | HTTP OPTIONS, no WBXML |
+| Provision | ✅ | 2-phase; policies are not enforced client-side |
+| FolderSync | ✅ | |
+| FolderCreate | ✅ | |
+| FolderDelete | ✅ | |
+| FolderUpdate | ✅ | rename / move |
+| Sync (Email) | ✅ | |
+| Sync (Calendar) | ✅ | |
+| Sync (Tasks) | ✅ | |
+| Sync (Contacts) | ✅ | |
+| Sync (Notes) | ✅ | IPM.StickyNote |
+| Ping | ✅ | long-poll push notifications |
+| SendMail | ✅ | MIME content |
+| SmartReply | ✅ | |
+| SmartForward | ✅ | |
+| ItemOperations — Fetch (email body) | ✅ | |
+| ItemOperations — Fetch (attachment) | ✅ | |
+| ItemOperations — EmptyFolderContents | ✅ | |
+| MoveItems | ✅ | |
+| Search | ✅ | |
+| GetItemEstimate | ✅ | |
+| MeetingResponse | ✅ | accept / tentative / decline |
+| Settings — Get OOF | ✅ | |
+| Settings — Set OOF | ✅ | |
+| Settings — DeviceInformation | ✅ | |
+| ResolveRecipients | ✅ | address book + GAL lookup |
+| ValidateCert | ✅ | S/MIME certificate validation |
+| Find | 🚧 | EAS 16.1 only; planned |
+| GetAttachment | ❌ | deprecated; replaced by ItemOperations |
 
 ## Deviations from the Microsoft specification
 
@@ -118,6 +184,7 @@ The package throws typed exceptions for key HTTP statuses:
 - Autodiscover works exclusively through HTTPS endpoints
 - OOM protection: response size limit (25 MB), opaque data (50 MB), WBXML nesting depth (50)
 - XML escaping in Autodiscover requests
+- MIME header injection prevention in test script
 - PII is not included in exception `toString()` output
 - DeviceId and DeviceType validation per MS-ASHTTP
 

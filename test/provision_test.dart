@@ -89,7 +89,7 @@ void main() {
     late ProvisionCommand command;
 
     setUp(() {
-      command = ProvisionCommand();
+      command = ProvisionCommand(policyAckStatus: PolicyAckStatus.success);
     });
 
     test('parses full EASProvisionDoc', () {

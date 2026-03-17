@@ -1,4 +1,4 @@
-/// Search command — server-side search.
+/// Search command — server-side search (Mailbox and GAL).
 ///
 /// Reference: MS-ASCMD section 2.2.1.16
 library;
@@ -6,6 +6,51 @@ library;
 import '../models/eas_email.dart';
 import '../wbxml/wbxml_document.dart';
 import 'eas_command.dart';
+
+/// A GAL (Global Address List) entry.
+class GalEntry {
+  final String? displayName;
+  final String? emailAddress;
+  final String? phone;
+  final String? office;
+  final String? title;
+  final String? company;
+  final String? alias;
+  final String? firstName;
+  final String? lastName;
+  final String? homePhone;
+  final String? mobilePhone;
+
+  const GalEntry({
+    this.displayName,
+    this.emailAddress,
+    this.phone,
+    this.office,
+    this.title,
+    this.company,
+    this.alias,
+    this.firstName,
+    this.lastName,
+    this.homePhone,
+    this.mobilePhone,
+  });
+
+  @override
+  String toString() => 'GalEntry($displayName <$emailAddress>)';
+}
+
+/// Result of a GAL Search.
+class GalSearchResult {
+  final int status;
+  final List<GalEntry> entries;
+  final int total;
+
+  const GalSearchResult({
+    required this.status,
+    this.entries = const [],
+    this.total = 0,
+  });
+}
 
 /// Result of a Search command.
 class SearchResult {
@@ -39,6 +84,9 @@ class SearchCommand extends EasCommand<SearchResult> {
   final int rangeStart;
   final int rangeEnd;
   final bool deepTraversal;
+  final int bodyType;
+  final int bodyTruncationSize;
+  final bool rebuildResults;
 
   SearchCommand({
     required this.query,
@@ -46,6 +94,9 @@ class SearchCommand extends EasCommand<SearchResult> {
     this.rangeStart = 0,
     this.rangeEnd = 49,
     this.deepTraversal = true,
+    this.bodyType = 2,
+    this.bodyTruncationSize = 512,
+    this.rebuildResults = false,
   });
 
   @override
@@ -70,6 +121,14 @@ class SearchCommand extends EasCommand<SearchResult> {
       ));
     }
 
+    if (rebuildResults) {
+      optionChildren.add(WbxmlElement(
+        namespace: 'Search',
+        tag: 'RebuildResults',
+        codePageIndex: 15,
+      ));
+    }
+
     optionChildren.add(WbxmlElement(
       namespace: 'AirSyncBase',
       tag: 'BodyPreference',
@@ -78,13 +137,13 @@ class SearchCommand extends EasCommand<SearchResult> {
         WbxmlElement.withText(
           namespace: 'AirSyncBase',
           tag: 'Type',
-          text: '2', // HTML
+          text: bodyType.toString(),
           codePageIndex: 17,
         ),
         WbxmlElement.withText(
           namespace: 'AirSyncBase',
           tag: 'TruncationSize',
-          text: '512',
+          text: bodyTruncationSize.toString(),
           codePageIndex: 17,
         ),
       ],
@@ -214,6 +273,117 @@ class SearchCommand extends EasCommand<SearchResult> {
       read: readStr == '1',
       body: body,
       bodyType: bodyType,
+    );
+  }
+}
+
+/// Search the Global Address List (GAL).
+///
+/// Uses the Search command with Store='GAL'.
+/// Reference: MS-ASCMD section 2.2.1.16
+class GalSearchCommand extends EasCommand<GalSearchResult> {
+  final String query;
+  final int rangeStart;
+  final int rangeEnd;
+
+  GalSearchCommand({
+    required this.query,
+    this.rangeStart = 0,
+    this.rangeEnd = 99,
+  });
+
+  @override
+  String get commandName => 'Search';
+
+  @override
+  WbxmlDocument buildRequest() {
+    return WbxmlDocument(
+      root: WbxmlElement(
+        namespace: 'Search',
+        tag: 'Search',
+        codePageIndex: 15,
+        children: [
+          WbxmlElement(
+            namespace: 'Search',
+            tag: 'Store',
+            codePageIndex: 15,
+            children: [
+              WbxmlElement.withText(
+                namespace: 'Search',
+                tag: 'Name',
+                text: 'GAL',
+                codePageIndex: 15,
+              ),
+              WbxmlElement(
+                namespace: 'Search',
+                tag: 'Query',
+                codePageIndex: 15,
+                children: [
+                  WbxmlElement.withText(
+                    namespace: 'Search',
+                    tag: 'FreeText',
+                    text: query,
+                    codePageIndex: 15,
+                  ),
+                ],
+              ),
+              WbxmlElement(
+                namespace: 'Search',
+                tag: 'Options',
+                codePageIndex: 15,
+                children: [
+                  WbxmlElement.withText(
+                    namespace: 'Search',
+                    tag: 'Range',
+                    text: '$rangeStart-$rangeEnd',
+                    codePageIndex: 15,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  GalSearchResult parseResponse(WbxmlDocument response) {
+    final root = response.root;
+    final status =
+        int.tryParse(root.childText('Search', 'Status') ?? '') ?? 0;
+
+    final resp = root.findChild('Search', 'Response');
+    if (resp == null) return GalSearchResult(status: status);
+
+    final store = resp.findChild('Search', 'Store');
+    if (store == null) return GalSearchResult(status: status);
+
+    final totalStr = store.childText('Search', 'Total');
+    final total = int.tryParse(totalStr ?? '') ?? 0;
+
+    final entries = store.findChildren('Search', 'Result').map((result) {
+      final props = result.findChild('Search', 'Properties');
+      if (props == null) return const GalEntry();
+      return GalEntry(
+        displayName: props.childText('GAL', 'DisplayName'),
+        emailAddress: props.childText('GAL', 'EmailAddress'),
+        phone: props.childText('GAL', 'Phone'),
+        office: props.childText('GAL', 'Office'),
+        title: props.childText('GAL', 'Title'),
+        company: props.childText('GAL', 'Company'),
+        alias: props.childText('GAL', 'Alias'),
+        firstName: props.childText('GAL', 'FirstName'),
+        lastName: props.childText('GAL', 'LastName'),
+        homePhone: props.childText('GAL', 'HomePhone'),
+        mobilePhone: props.childText('GAL', 'MobilePhone'),
+      );
+    }).toList();
+
+    return GalSearchResult(
+      status: status,
+      entries: entries,
+      total: total,
     );
   }
 }

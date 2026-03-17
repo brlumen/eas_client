@@ -58,6 +58,9 @@ class AirSyncBaseCodePage extends CodePage {
         0x2B: 'AltitudeAccuracy',
         0x2C: 'LocationUri',
         0x2D: 'InstanceId',
+        0x2E: 'Picture',
+        0x2F: 'MaxSize',
+        0x30: 'MaxPictures',
       };
 
   @override

@@ -33,12 +33,13 @@ class ProvisionCommand {
 
   /// Status sent to server during policy acknowledgement (phase 2).
   ///
-  /// Per MS-ASPROV 2.2.2.54.1, the client should report the actual
-  /// policy application status. Defaults to [PolicyAckStatus.success].
+  /// Per MS-ASPROV 2.2.2.54.1, the client SHOULD report the actual
+  /// policy application status. Required — the consumer must explicitly
+  /// indicate whether policies have been applied.
   final PolicyAckStatus policyAckStatus;
 
   ProvisionCommand({
-    this.policyAckStatus = PolicyAckStatus.success,
+    required this.policyAckStatus,
   });
 
   /// Execute the full two-phase provisioning flow.
@@ -148,27 +149,7 @@ class ProvisionCommand {
         tag: 'Provision',
         codePageIndex: 14,
         children: [
-          WbxmlElement(
-            namespace: 'Provision',
-            tag: 'Policies',
-            codePageIndex: 14,
-            children: [
-              WbxmlElement(
-                namespace: 'Provision',
-                tag: 'Policy',
-                codePageIndex: 14,
-                children: [
-                  WbxmlElement.withText(
-                    namespace: 'Provision',
-                    tag: 'PolicyType',
-                    text: 'MS-EAS-Provisioning-WBXML',
-                    codePageIndex: 14,
-                  ),
-                ],
-              ),
-            ],
-          ),
-          // Device information for EAS 16.1
+          // DeviceInformation MUST precede Policies per MS-ASPROV for EAS >= 14.1
           WbxmlElement(
             namespace: 'Settings',
             tag: 'DeviceInformation',
@@ -196,6 +177,26 @@ class ProvisionCommand {
                     tag: 'UserAgent',
                     text: 'FlutterEAS/1.0',
                     codePageIndex: 18,
+                  ),
+                ],
+              ),
+            ],
+          ),
+          WbxmlElement(
+            namespace: 'Provision',
+            tag: 'Policies',
+            codePageIndex: 14,
+            children: [
+              WbxmlElement(
+                namespace: 'Provision',
+                tag: 'Policy',
+                codePageIndex: 14,
+                children: [
+                  WbxmlElement.withText(
+                    namespace: 'Provision',
+                    tag: 'PolicyType',
+                    text: 'MS-EAS-Provisioning-WBXML',
+                    codePageIndex: 14,
                   ),
                 ],
               ),
@@ -282,8 +283,10 @@ class ProvisionCommand {
     final root = doc.root;
     final statusCode =
         int.tryParse(root.childText('Provision', 'Status') ?? '') ?? 0;
+    // Unknown codes (e.g. non-standard server extensions like Z-Push status 111)
+    // are treated as protocolError → caller returns null (no provisioning needed).
     final status =
-        ProvisionStatus.fromCode(statusCode) ?? ProvisionStatus.serverError;
+        ProvisionStatus.fromCode(statusCode) ?? ProvisionStatus.protocolError;
 
     final policies = root.findChild('Provision', 'Policies');
     if (policies == null) {

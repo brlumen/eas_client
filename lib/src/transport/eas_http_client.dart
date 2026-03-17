@@ -39,6 +39,9 @@ class EasHttpClient {
   String protocolVersion;
 
   /// Policy key from Provision command. Required for most commands.
+  ///
+  /// Set internally by [ProvisionCommand]. Consumers should not
+  /// modify this directly — use [ProvisionCommand.execute] instead.
   String? policyKey;
 
   /// Device ID (unique identifier for this device).
@@ -136,18 +139,34 @@ class EasHttpClient {
 
     headers = credentials.applyToHeaders(headers);
 
-    final request = http.Request('POST', uri);
-    request.headers.addAll(headers);
-    if (wbxmlBody != null) {
-      request.bodyBytes = wbxmlBody;
+    // Retry once on connection-closed errors (stale keep-alive).
+    http.StreamedResponse? streamedResponse;
+    for (var attempt = 0; attempt < 2; attempt++) {
+      final request = http.Request('POST', uri);
+      request.headers.addAll(headers);
+      if (wbxmlBody != null) {
+        request.bodyBytes = wbxmlBody;
+      }
+      // Disable keep-alive on retry to force a fresh connection.
+      if (attempt > 0) {
+        request.persistentConnection = false;
+      }
+
+      try {
+        streamedResponse = await _httpClient
+            .send(request)
+            .timeout(timeout ?? commandTimeout);
+        break;
+      } on http.ClientException catch (e) {
+        if (attempt == 0 && e.message.contains('Connection closed')) {
+          continue;
+        }
+        rethrow;
+      }
     }
 
-    final streamedResponse = await _httpClient
-        .send(request)
-        .timeout(timeout ?? commandTimeout);
-
     // Check Content-Length header early
-    final contentLength = streamedResponse.contentLength;
+    final contentLength = streamedResponse!.contentLength;
     if (contentLength != null && contentLength > maxResponseSize) {
       // Drain stream to avoid resource leaks
       await streamedResponse.stream.drain<void>();
@@ -178,6 +197,62 @@ class EasHttpClient {
 
     final request = http.Request('OPTIONS', uri);
     request.headers.addAll(headers);
+
+    final streamedResponse = await _httpClient
+        .send(request)
+        .timeout(commandTimeout);
+
+    final body = await _readBodyWithLimit(
+      streamedResponse.stream,
+      maxResponseSize,
+    );
+
+    return EasResponse(
+      statusCode: streamedResponse.statusCode,
+      headers: streamedResponse.headers,
+      body: body,
+    );
+  }
+
+  /// Send a raw MIME command (SendMail, SmartReply, SmartForward).
+  ///
+  /// Per MS-ASCMD, these commands support sending raw MIME with
+  /// `Content-Type: message/rfc822` and extra query parameters
+  /// instead of WBXML wrapping.
+  Future<EasResponse> sendMimeCommand(
+    String command,
+    Uint8List mimeBody, {
+    required String clientId,
+    bool saveInSentItems = true,
+  }) async {
+    final uri = Uri.https(
+      server,
+      '/Microsoft-Server-ActiveSync',
+      {
+        'Cmd': command,
+        'User': _extractUsername(),
+        'DeviceId': deviceId,
+        'DeviceType': deviceType,
+        'ClientId': clientId,
+        if (saveInSentItems) 'SaveInSent': 'T',
+      },
+    );
+
+    var headers = <String, String>{
+      'Content-Type': 'message/rfc822',
+      'MS-ASProtocolVersion': protocolVersion,
+      'User-Agent': 'FlutterEAS/1.0',
+    };
+
+    if (policyKey != null) {
+      headers['X-MS-PolicyKey'] = policyKey!;
+    }
+
+    headers = credentials.applyToHeaders(headers);
+
+    final request = http.Request('POST', uri);
+    request.headers.addAll(headers);
+    request.bodyBytes = mimeBody;
 
     final streamedResponse = await _httpClient
         .send(request)

@@ -84,6 +84,27 @@ class EasEmail {
   /// Whether this is a draft.
   final bool isDraft;
 
+  /// Content class (e.g., 'urn:content-classes:message').
+  final String? contentClass;
+
+  /// Internet code page ID.
+  final int? internetCPID;
+
+  /// Categories.
+  final List<String> categories;
+
+  /// Last verb executed (1=ReplyToSender, 2=ReplyToAll, 3=Forward).
+  final int? lastVerbExecuted;
+
+  /// Time of last verb execution.
+  final DateTime? lastVerbExecutionTime;
+
+  /// Whether email was received as BCC.
+  final bool? receivedAsBcc;
+
+  /// Sensitivity: 0=normal, 1=personal, 2=private, 3=confidential.
+  final int? sensitivity;
+
   const EasEmail({
     required this.serverId,
     this.subject = '',
@@ -106,6 +127,13 @@ class EasEmail {
     this.conversationId,
     this.flagStatus = 0,
     this.isDraft = false,
+    this.contentClass,
+    this.internetCPID,
+    this.categories = const [],
+    this.lastVerbExecuted,
+    this.lastVerbExecutionTime,
+    this.receivedAsBcc,
+    this.sensitivity,
   });
 
   @override

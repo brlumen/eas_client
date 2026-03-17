@@ -26,6 +26,7 @@ class ItemEstimateCodePage extends CodePage {
         0x0C: 'Estimate',
         0x0D: 'Response',
         0x0E: 'Status',
+        0x0F: 'Options',
       };
 
   @override

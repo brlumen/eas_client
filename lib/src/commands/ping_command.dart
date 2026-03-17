@@ -67,18 +67,54 @@ class PingResult {
   });
 }
 
+/// A folder to monitor with Ping, including its content class.
+class PingFolder {
+  /// Server-assigned folder ID.
+  final String id;
+
+  /// Content class: 'Email', 'Calendar', 'Tasks', 'Contacts', 'Notes'.
+  final String className;
+
+  const PingFolder({required this.id, this.className = 'Email'});
+}
+
 class PingCommand extends EasCommand<PingResult> {
-  final List<String> folderIds;
+  final List<PingFolder> folders;
   final int heartbeatInterval;
+
+  /// Minimum heartbeat interval per MS-ASCMD.
+  static const int minHeartbeat = 60;
+
+  /// Maximum heartbeat interval per MS-ASCMD.
+  static const int maxHeartbeat = 3540;
 
   /// Create a Ping command.
   ///
   /// [folderIds] — folders to monitor for changes.
-  /// [heartbeatInterval] — seconds to keep connection open (60-900 per MS-ASCMD).
+  /// [heartbeatInterval] — seconds to keep connection open
+  ///   ($minHeartbeat-$maxHeartbeat per MS-ASCMD 2.2.1.13).
+  /// Create from folder IDs only (all treated as Email class).
+  factory PingCommand.fromIds({
+    required List<String> folderIds,
+    int heartbeatInterval = 480,
+  }) =>
+      PingCommand(
+        folders: folderIds.map((id) => PingFolder(id: id)).toList(),
+        heartbeatInterval: heartbeatInterval,
+      );
+
   PingCommand({
-    required this.folderIds,
+    required this.folders,
     this.heartbeatInterval = 480,
-  });
+  }) {
+    if (heartbeatInterval < minHeartbeat || heartbeatInterval > maxHeartbeat) {
+      throw ArgumentError.value(
+        heartbeatInterval,
+        'heartbeatInterval',
+        'Must be $minHeartbeat-$maxHeartbeat (MS-ASCMD 2.2.1.13)',
+      );
+    }
+  }
 
   @override
   String get commandName => 'Ping';
@@ -101,9 +137,9 @@ class PingCommand extends EasCommand<PingResult> {
             namespace: 'Ping',
             tag: 'Folders',
             codePageIndex: 13,
-            children: folderIds
+            children: folders
                 .map(
-                  (id) => WbxmlElement(
+                  (f) => WbxmlElement(
                     namespace: 'Ping',
                     tag: 'Folder',
                     codePageIndex: 13,
@@ -111,13 +147,13 @@ class PingCommand extends EasCommand<PingResult> {
                       WbxmlElement.withText(
                         namespace: 'Ping',
                         tag: 'Id',
-                        text: id,
+                        text: f.id,
                         codePageIndex: 13,
                       ),
                       WbxmlElement.withText(
                         namespace: 'Ping',
                         tag: 'Class',
-                        text: 'Email',
+                        text: f.className,
                         codePageIndex: 13,
                       ),
                     ],

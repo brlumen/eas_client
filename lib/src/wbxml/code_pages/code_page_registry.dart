@@ -7,11 +7,16 @@ import 'code_page.dart';
 import 'air_sync.dart';
 import 'contacts.dart';
 import 'email.dart';
+import 'notes.dart';
+import 'contacts2.dart';
 import 'calendar.dart';
 import 'move.dart';
 import 'item_estimate.dart';
 import 'folder_hierarchy.dart';
+import 'meeting_response.dart';
 import 'tasks.dart';
+import 'resolve_recipients.dart';
+import 'validate_cert.dart';
 import 'ping.dart';
 import 'provision.dart';
 import 'search.dart';
@@ -20,7 +25,10 @@ import 'air_sync_base.dart';
 import 'settings.dart';
 import 'item_operations.dart';
 import 'compose_mail.dart';
+import 'document_library.dart';
 import 'email2.dart';
+import 'find.dart';
+import 'rights_management.dart';
 
 class CodePageRegistry {
   static final CodePageRegistry instance = CodePageRegistry._();
@@ -35,16 +43,24 @@ class CodePageRegistry {
     5: MoveCodePage.instance,
     6: ItemEstimateCodePage.instance,
     7: FolderHierarchyCodePage.instance,
+    8: MeetingResponseCodePage.instance,
     9: TasksCodePage.instance,
+    10: ResolveRecipientsCodePage.instance,
+    11: ValidateCertCodePage.instance,
+    12: Contacts2CodePage.instance,
     13: PingCodePage.instance,
     14: ProvisionCodePage.instance,
     15: SearchCodePage.instance,
     16: GalCodePage.instance,
     17: AirSyncBaseCodePage.instance,
     18: SettingsCodePage.instance,
+    19: DocumentLibraryCodePage.instance,
     20: ItemOperationsCodePage.instance,
     21: ComposeMailCodePage.instance,
     22: Email2CodePage.instance,
+    23: NotesCodePage.instance,
+    24: RightsManagementCodePage.instance,
+    25: FindCodePage.instance,
   };
 
   late final Map<String, CodePage> _byNamespace = {

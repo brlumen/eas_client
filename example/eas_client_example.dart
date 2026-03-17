@@ -57,7 +57,7 @@ Future<void> easClientExample() async {
     print('Supported versions: ${info.supportedVersions}');
 
     // 2. Provision (required before any other command)
-    await client.provision();
+    await client.provision(policyAckStatus: PolicyAckStatus.notApplied);
 
     // 3. Get folder list
     final folders = await client.syncFolders();
