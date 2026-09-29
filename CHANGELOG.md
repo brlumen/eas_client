@@ -1,3 +1,7 @@
+## 0.1.0-alpha.3
+
+- Support `xml` 7.x (`^7.0.1`)
+
 ## 0.1.0-alpha.2
 
 Verified against a live Exchange Server 2019 (protocol 16.1).

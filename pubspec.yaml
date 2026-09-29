@@ -1,6 +1,6 @@
 name: eas_client
 description: Dart implementation of Microsoft Exchange ActiveSync (EAS) protocol client. Supports WBXML codec, email sync, push notifications, and more.
-version: 0.1.0-alpha.2
+version: 0.1.0-alpha.3
 repository: https://github.com/brlumen/eas_client
 homepage: https://github.com/brlumen/eas_client
 documentation: https://github.com/brlumen/eas_client#readme
@@ -19,7 +19,7 @@ dependencies:
   http: ^1.3.0
   collection: ^1.19.0
   meta: ^1.16.0
-  xml: ^6.5.0
+  xml: ^7.0.1
 
 dev_dependencies:
   lints: ^6.0.0

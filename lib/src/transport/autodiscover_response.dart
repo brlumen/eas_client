@@ -182,7 +182,7 @@ class AutodiscoverResponse {
       return null;
     }
     final response =
-        doc.findAllElements('Response', namespace: '*').firstOrNull ??
+        doc.findAllElements('Response', namespaceUri: '*').firstOrNull ??
         doc.rootElement;
 
     final user = _child(response, 'User');
@@ -192,7 +192,7 @@ class AutodiscoverResponse {
     final servers = <AutodiscoverServer>[];
     final legacyHosts = <String>[];
     for (final s
-        in settings?.findElements('Server', namespace: '*') ??
+        in settings?.findElements('Server', namespaceUri: '*') ??
             const <xml.XmlElement>[]) {
       servers.add(
         AutodiscoverServer(
@@ -204,7 +204,7 @@ class AutodiscoverResponse {
       );
     }
     // Legacy/non-standard: <Server>hostname</Server> without children.
-    for (final s in doc.findAllElements('Server', namespace: '*')) {
+    for (final s in doc.findAllElements('Server', namespaceUri: '*')) {
       if (s.childElements.isEmpty) {
         final t = s.innerText.trim();
         if (t.isNotEmpty) legacyHosts.add(t);
@@ -215,7 +215,7 @@ class AutodiscoverResponse {
     var redirect = action == null ? null : _text(action, 'Redirect');
     redirect ??= action == null ? null : _text(action, 'RedirectAddr');
     if (redirect == null) {
-      final addr = doc.findAllElements('RedirectAddr', namespace: '*');
+      final addr = doc.findAllElements('RedirectAddr', namespaceUri: '*');
       if (addr.isNotEmpty) redirect = _nonEmpty(addr.first.innerText);
     }
 
@@ -245,7 +245,7 @@ class AutodiscoverResponse {
   }
 
   static xml.XmlElement? _child(xml.XmlElement parent, String name) =>
-      parent.findElements(name, namespace: '*').firstOrNull;
+      parent.findElements(name, namespaceUri: '*').firstOrNull;
 
   static String? _text(xml.XmlElement parent, String name) {
     final el = _child(parent, name);
