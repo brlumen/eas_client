@@ -2,9 +2,6 @@
 
 Verified against a live Exchange Server 2019 (protocol 16.1).
 
-The Git repository history was reset with this release; the 0.1.0-alpha.1
-sources remain available on pub.dev.
-
 ### Breaking changes
 
 - `EasClient.provision()` → `provision({required PolicyAckStatus policyAckStatus, EasDeviceInformation? deviceInformation})`; `ProvisionCommand` likewise requires `policyAckStatus`
@@ -49,19 +46,3 @@ sources remain available on pub.dev.
 - DNS SRV resolver hardening (random query id, source check, bounded parsing)
 - CR/LF injection checks for MIME headers, User-Agent, Accept-Language, cookies; cookie jar limits
 - `X-MS-Credential-Service-Url` accepted only over HTTPS; multipart part limit 50 MB
-
-## 0.1.0-alpha.1
-
-- Initial alpha release
-- WBXML codec with 18 EAS code pages (WAP-192)
-- Autodiscover — automatic server discovery via MS-OXDISCO (steps 1, 2, 4)
-- Provisioning — security policy negotiation (MS-ASPROV)
-- FolderSync — folder hierarchy synchronization
-- Sync — email/contacts/calendar/tasks synchronization
-- Ping — push notifications via long-poll
-- SendMail — send email through EAS
-- Search — server-side mailbox search
-- MoveItems — move items between folders
-- ItemOperations — fetch full message body and attachments
-- Basic and OAuth2 authentication support
-- Security: HTTPS-only, OOM protection, PII-safe exceptions
