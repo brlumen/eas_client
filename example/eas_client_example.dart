@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:eas_client/eas_client.dart';
@@ -77,11 +78,13 @@ Future<void> easClientExample() async {
     // 5. Send email
     await client.sendMail(
       clientId: 'unique-id-123',
-      mimeContent: 'From: user@example.com\r\n'
-          'To: recipient@example.com\r\n'
-          'Subject: Test\r\n'
-          '\r\n'
-          'Hello from eas_client!',
+      mimeContent: utf8.encode(
+        'From: user@example.com\r\n'
+        'To: recipient@example.com\r\n'
+        'Subject: Test\r\n'
+        '\r\n'
+        'Hello from eas_client!',
+      ),
     );
   } finally {
     client.dispose();

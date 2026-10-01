@@ -45,6 +45,10 @@ class WbxmlElement {
   /// Opaque binary data.
   Uint8List? opaque;
 
+  /// Original bytes of [text] when they are not valid UTF-8 (set by the
+  /// decoder only; [text] then holds a lenient decoding).
+  Uint8List? rawText;
+
   /// Child elements.
   final List<WbxmlElement> children;
 

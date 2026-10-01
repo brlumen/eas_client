@@ -1,6 +1,8 @@
 /// AirSyncBase body models (MS-ASAIRS 2.2.2.9 Body, 2.2.2.10 BodyPart).
 library;
 
+import 'dart:typed_data';
+
 import '../wbxml/wbxml_document.dart';
 import 'wbxml_helpers.dart';
 
@@ -11,6 +13,10 @@ class EasBody {
 
   /// Body content (possibly truncated).
   final String? data;
+
+  /// Raw bytes of the body content for [type] 4 (MIME), exactly as sent
+  /// by the server (no charset conversion); `null` for other types.
+  final Uint8List? dataBytes;
 
   /// Estimated size of the full body in bytes.
   final int? estimatedDataSize;
@@ -27,21 +33,29 @@ class EasBody {
   const EasBody({
     this.type = 1,
     this.data,
+    this.dataBytes,
     this.estimatedDataSize,
     this.truncated = false,
     this.preview,
     this.part,
   });
 
+  /// Body type of MIME content.
+  static const mimeType = 4;
+
   /// Parse an `airsyncbase:Body` element.
-  factory EasBody.fromElement(WbxmlElement el) => EasBody(
-    type: el.integer('AirSyncBase', 'Type') ?? 1,
-    data: el.str('AirSyncBase', 'Data'),
-    estimatedDataSize: el.integer('AirSyncBase', 'EstimatedDataSize'),
-    truncated: el.boolean('AirSyncBase', 'Truncated') ?? false,
-    preview: el.str('AirSyncBase', 'Preview'),
-    part: el.integer('ItemOperations', 'Part'),
-  );
+  factory EasBody.fromElement(WbxmlElement el) {
+    final type = el.integer('AirSyncBase', 'Type') ?? 1;
+    return EasBody(
+      type: type,
+      data: el.str('AirSyncBase', 'Data'),
+      dataBytes: type == mimeType ? el.bytes('AirSyncBase', 'Data') : null,
+      estimatedDataSize: el.integer('AirSyncBase', 'EstimatedDataSize'),
+      truncated: el.boolean('AirSyncBase', 'Truncated') ?? false,
+      preview: el.str('AirSyncBase', 'Preview'),
+      part: el.integer('ItemOperations', 'Part'),
+    );
+  }
 
   /// `airsyncbase:Body` of [parent], or `null`.
   static EasBody? of(WbxmlElement parent) {

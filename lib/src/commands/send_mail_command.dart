@@ -30,9 +30,10 @@ abstract class ComposeMailCommand extends EasCommand<void> {
   /// sends (status 118).
   final String clientId;
 
-  /// MIME content of the message (headers + body); `null` only for a
-  /// SmartForward of a meeting with Forwardees/Body.
-  final String? mimeContent;
+  /// MIME content of the message (headers + body) as raw bytes, sent
+  /// unchanged; `null` only for a SmartForward of a meeting with
+  /// Forwardees/Body. Use `utf8.encode` for a string message.
+  final Uint8List? mimeContent;
 
   /// Whether to save the message in Sent Items.
   final bool saveInSentItems;
@@ -47,13 +48,13 @@ abstract class ComposeMailCommand extends EasCommand<void> {
 
   ComposeMailCommand({
     required this.clientId,
-    required String this.mimeContent,
+    required Uint8List this.mimeContent,
     this.saveInSentItems = true,
     this.templateId,
     this.accountId,
   }) {
     checkLength(clientId, 40, 'clientId');
-    validateMimeHeaders(mimeContent!);
+    validateMimeHeaderBytes(mimeContent!);
   }
 
   /// Constructor for requests without MIME content.
@@ -68,17 +69,28 @@ abstract class ComposeMailCommand extends EasCommand<void> {
   ///
   /// Checks only the header section (before the first \r\n\r\n separator).
   /// Bare \r or \n within a header line indicates injection attempt.
-  static void validateMimeHeaders(String mime) {
-    final headerEnd = mime.indexOf('\r\n\r\n');
-    final headers = headerEnd >= 0 ? mime.substring(0, headerEnd) : mime;
-    for (final line in headers.split('\r\n')) {
-      if (line.contains('\r') || line.contains('\n')) {
+  static void validateMimeHeaders(String mime) =>
+      validateMimeHeaderBytes(utf8.encode(mime));
+
+  /// Byte version of [validateMimeHeaders].
+  static void validateMimeHeaderBytes(Uint8List mime) {
+    const cr = 13, lf = 10;
+    for (var i = 0; i < mime.length; i++) {
+      final b = mime[i];
+      if (b != cr && b != lf) continue;
+      final crlf = b == cr && i + 1 < mime.length && mime[i + 1] == lf;
+      if (!crlf) {
         throw ArgumentError.value(
           '(content hidden)',
           'mimeContent',
           'MIME headers contain bare CR or LF — possible header injection',
         );
       }
+      // CRLF CRLF ends the header section.
+      if (i + 3 < mime.length && mime[i + 2] == cr && mime[i + 3] == lf) {
+        return;
+      }
+      i++;
     }
   }
 
@@ -106,8 +118,7 @@ abstract class ComposeMailCommand extends EasCommand<void> {
       if (accountId != null) xText(_ns, 'AccountId', accountId!),
       if (saveInSentItems) xEl(_ns, 'SaveInSentItems'),
       ...buildPreMimeElements(),
-      if (mimeContent != null)
-        xOpaque(_ns, 'Mime', Uint8List.fromList(utf8.encode(mimeContent!))),
+      if (mimeContent != null) xOpaque(_ns, 'Mime', mimeContent!),
       if (templateId != null)
         xText('RightsManagement', 'TemplateID', templateId!),
       ...buildTrailingElements(),
@@ -125,7 +136,7 @@ abstract class ComposeMailCommand extends EasCommand<void> {
         '$commandName without MIME requires protocol version 16.0+',
       );
     }
-    return Uint8List.fromList(utf8.encode(mime));
+    return mime;
   }
 
   @override
@@ -178,6 +189,10 @@ class SendMailCommand extends ComposeMailCommand {
   /// See [ComposeMailCommand.validateMimeHeaders].
   static void validateMimeHeaders(String mime) =>
       ComposeMailCommand.validateMimeHeaders(mime);
+
+  /// See [ComposeMailCommand.validateMimeHeaderBytes].
+  static void validateMimeHeaderBytes(Uint8List mime) =>
+      ComposeMailCommand.validateMimeHeaderBytes(mime);
 }
 
 /// Identifies the source message of SmartReply/SmartForward: either

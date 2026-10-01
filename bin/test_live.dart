@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -314,7 +315,10 @@ Requirements:
 
       final clientId = DateTime.now().millisecondsSinceEpoch.toString();
       try {
-        await client.sendMail(clientId: clientId, mimeContent: mime);
+        await client.sendMail(
+          clientId: clientId,
+          mimeContent: utf8.encode(mime),
+        );
         print('Sent!');
       } catch (e) {
         print('SendMail failed: $e');
@@ -344,7 +348,7 @@ Requirements:
             clientId: DateTime.now().millisecondsSinceEpoch.toString(),
             serverId: emails.first.serverId,
             collectionId: inbox.serverId,
-            mimeContent: mime,
+            mimeContent: utf8.encode(mime),
           );
           print('Reply sent!');
         } catch (e) {

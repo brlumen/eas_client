@@ -348,8 +348,8 @@ class EasEmail {
   /// IRM license of a protected message (MS-ASRM).
   final EasRightsManagementLicense? rightsManagementLicense;
 
-  /// EAS 2.5 MIME content (`email:MIMEData`).
-  final String? mimeData;
+  /// EAS 2.5 MIME content (`email:MIMEData`), raw bytes.
+  final Uint8List? mimeData;
 
   /// EAS 2.5 MIME size (`email:MIMESize`).
   final int? mimeSize;
@@ -457,11 +457,18 @@ class EasEmail {
       umCallerId: data.str('Email2', 'UmCallerID'),
       umUserNotes: data.str('Email2', 'UmUserNotes'),
       rightsManagementLicense: EasRightsManagementLicense.of(data),
-      mimeData: data.str('Email', 'MIMEData'),
+      mimeData: data.bytes('Email', 'MIMEData'),
       mimeSize: data.integer('Email', 'MIMESize'),
       mimeTruncated: data.boolean('Email', 'MIMETruncated'),
     );
   }
+
+  /// Full MIME message as raw bytes: [mimeData] (EAS 2.5) or a body of
+  /// type 4 (`airsyncbase:Body`, EAS 12.0+); `null` if no MIME body was
+  /// requested. Check [bodyTruncated] / [mimeTruncated] before use.
+  Uint8List? get mime =>
+      mimeData ??
+      (bodyDetails?.type == EasBody.mimeType ? bodyDetails!.dataBytes : null);
 
   /// Whether this is an SMS message (`IPM.Note.Mobile.SMS`).
   bool get isSms => messageClass?.startsWith('IPM.Note.Mobile.SMS') ?? false;

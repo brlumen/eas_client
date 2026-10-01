@@ -8,6 +8,7 @@ import 'package:meta/meta.dart';
 import '../models/eas_global_status.dart';
 import '../models/eas_policy.dart';
 import '../transport/eas_http_client.dart';
+import '../transport/eas_raw_http.dart';
 import '../wbxml/wbxml_codec.dart';
 import '../wbxml/wbxml_document.dart';
 
@@ -37,6 +38,30 @@ class EasCommandException implements Exception {
   @override
   String toString() =>
       'EasCommandException($command): $message '
+      '(HTTP: $statusCode, EAS status: $easStatus)';
+}
+
+/// Thrown when the server requires the device to (re-)provision: HTTP 449
+/// or global status 142/143/144 (MS-ASPROV 3.2.5.1). Run Provision (e.g.
+/// `EasClient.reprovision`) and retry the command.
+///
+/// A subclass of [EasCommandException] with
+/// [EasCommandException.requiresProvisioning] `true`, so existing handlers
+/// keep working.
+class EasProvisioningRequiredException extends EasCommandException {
+  EasProvisioningRequiredException({
+    required super.command,
+    super.statusCode,
+    super.easStatus,
+    required super.message,
+  });
+
+  @override
+  bool get requiresProvisioning => true;
+
+  @override
+  String toString() =>
+      'EasProvisioningRequiredException($command): $message '
       '(HTTP: $statusCode, EAS status: $easStatus)';
 }
 
@@ -253,8 +278,8 @@ abstract class EasCommand<T> {
   /// left to [parseResponse].
   ///
   /// - 140 → [EasRemoteWipeException]
-  /// - 142/143/144 → [EasCommandException] with
-  ///   [EasCommandException.requiresProvisioning] (same signal as HTTP 449)
+  /// - 142/143/144 → [EasProvisioningRequiredException] (same signal as
+  ///   HTTP 449)
   /// - others → [EasCommandException] with [EasCommandException.easStatus]
   @visibleForTesting
   void checkGlobalStatus(WbxmlDocument response) {
@@ -266,16 +291,21 @@ abstract class EasCommand<T> {
     if (status == EasGlobalStatus.remoteWipeRequested) {
       throw EasRemoteWipeException(command: commandName);
     }
+    if (status != null && status.requiresProvisioning) {
+      throw EasProvisioningRequiredException(
+        command: commandName,
+        statusCode: 200,
+        easStatus: code,
+        message:
+            'Server requires provisioning (${status.description}). '
+            'Run Provision command first.',
+      );
+    }
     throw EasCommandException(
       command: commandName,
       statusCode: 200,
       easStatus: code,
-      message: status == null
-          ? 'Unknown global status'
-          : status.requiresProvisioning
-          ? 'Server requires provisioning (${status.description}). '
-                'Run Provision command first.'
-          : status.description,
+      message: status?.description ?? 'Unknown global status',
     );
   }
 
@@ -285,7 +315,7 @@ abstract class EasCommand<T> {
   Exception httpError(EasResponse response) {
     switch (response.statusCode) {
       case 449:
-        return EasCommandException(
+        return EasProvisioningRequiredException(
           command: commandName,
           statusCode: 449,
           message:
@@ -344,21 +374,41 @@ abstract class EasCommand<T> {
   /// Execute this command against the server.
   ///
   /// [timeout] overrides the default [EasHttpClient.commandTimeout].
-  Future<T> execute(EasHttpClient client, {Duration? timeout}) async {
+  Future<T> execute(EasHttpClient client, {Duration? timeout}) async =>
+      handleResponse(await client.send(prepare(client), timeout: timeout));
+
+  /// The HTTP request for this command with [client]'s transport state
+  /// (protocol version, policy key, credentials, cookies).
+  EasHttpRequest prepare(EasHttpClient client) {
     final version = client.protocolVersion;
-    final response = await client.sendCommand(
+    return client.prepareCommand(
       commandName,
       encodeRequest(version),
-      timeout: timeout,
       extraHeaders: extraHeaders,
       parameters: requestParameters(version),
       contentType: requestContentType(version),
       saveInSent: saveInSentParameter(version),
       acceptMultiPart: acceptMultiPart,
     );
+  }
 
+  /// Map an HTTP [response] to the result: HTTP errors throw
+  /// ([httpError]), an empty body goes to [parseEmptyResponse], anything
+  /// else to [parseHttpResponse].
+  T handleResponse(EasResponse response) {
     if (!response.isSuccess) throw httpError(response);
     if (response.body.isEmpty) return parseEmptyResponse();
     return parseHttpResponse(response);
   }
+
+  /// This command as a complete HTTP/1.1 request (see
+  /// [EasHttpRequest.toHttp11Bytes]), for sending over a custom socket.
+  Uint8List buildRawRequest(EasHttpClient client) =>
+      prepare(client).toHttp11Bytes();
+
+  /// Parse a raw HTTP/1.1 response to [buildRawRequest] (Content-Length
+  /// or chunked body) like [execute] would, updating [client]'s cookies,
+  /// server version and notices.
+  T parseRawHttpResponse(EasHttpClient client, Uint8List bytes) =>
+      handleResponse(client.acceptRawResponse(commandName, bytes));
 }

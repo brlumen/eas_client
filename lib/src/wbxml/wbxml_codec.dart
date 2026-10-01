@@ -152,7 +152,7 @@ class WbxmlDecoder {
 
       if (token == tokenStrI) {
         reader.readByte(); // consume STR_I
-        element.text = reader.readString();
+        _setText(element, reader.readStringBytes());
         continue;
       }
 
@@ -171,7 +171,7 @@ class WbxmlDecoder {
       if (token == tokenStrT) {
         reader.readByte(); // consume STR_T
         final offset = reader.readMbUint32();
-        element.text = _readStringFromTable(stringTable, offset);
+        _setText(element, _readStringFromTable(stringTable, offset));
         continue;
       }
 
@@ -191,17 +191,30 @@ class WbxmlDecoder {
       if (b == tokenEnd) return;
       // Skip attribute values (STR_I, etc.)
       if (b == tokenStrI) {
-        reader.readString();
+        reader.readStringBytes();
       }
     }
   }
 
-  String _readStringFromTable(Uint8List table, int offset) {
+  Uint8List _readStringFromTable(Uint8List table, int offset) {
     int end = offset;
     while (end < table.length && table[end] != 0) {
       end++;
     }
-    return utf8.decode(table.sublist(offset, end));
+    return table.sublist(offset, end);
+  }
+
+  /// Set the text of [element]. A string that is not valid UTF-8 (e.g.
+  /// 8-bit MIME in `airsyncbase:Data`) is decoded leniently and its bytes
+  /// are kept in [WbxmlElement.rawText] so no data is lost.
+  static void _setText(WbxmlElement element, Uint8List bytes) {
+    try {
+      element.text = utf8.decode(bytes);
+    } on FormatException {
+      element
+        ..text = utf8.decode(bytes, allowMalformed: true)
+        ..rawText = bytes;
+    }
   }
 }
 
@@ -344,17 +357,17 @@ class _ByteReader {
     return result;
   }
 
-  /// Read a NULL-terminated UTF-8 string.
-  String readString() {
+  /// Read the bytes of a NULL-terminated string.
+  Uint8List readStringBytes() {
     final start = _offset;
     while (_offset < _data.length && _data[_offset] != 0) {
       _offset++;
     }
-    final str = utf8.decode(_data.sublist(start, _offset));
+    final bytes = _data.sublist(start, _offset);
     if (_offset < _data.length) {
       _offset++; // skip NULL terminator
     }
-    return str;
+    return bytes;
   }
 
   /// Read [length] bytes.

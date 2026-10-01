@@ -13,7 +13,7 @@ final _decoder = WbxmlDecoder();
 WbxmlElement _roundTrip(WbxmlDocument doc) =>
     _decoder.decode(_encoder.encode(doc)).root;
 
-const _mime = 'To: a@example.com\r\nSubject: Hi\r\n\r\nBody';
+final _mime = utf8.encode('To: a@example.com\r\nSubject: Hi\r\n\r\nBody');
 
 /// Build a multipart body from [parts] (little-endian layout).
 Uint8List _multipart(List<List<int>> parts) {
@@ -102,10 +102,7 @@ void main() {
         '2026-03-20T22:40:00.000Z',
       );
       expect(root.childText('RightsManagement', 'TemplateID'), 'tpl-1');
-      expect(
-        utf8.decode(root.findChild('ComposeMail', 'Mime')!.opaque!),
-        _mime,
-      );
+      expect(root.findChild('ComposeMail', 'Mime')!.opaque, _mime);
     });
 
     test('LongId source, no optional elements', () {
@@ -153,7 +150,7 @@ void main() {
         () => SmartForwardCommand(
           clientId: 'c',
           longId: 'x',
-          mimeContent: 'Subject: a\nBcc: evil@x\r\n\r\nb',
+          mimeContent: utf8.encode('Subject: a\nBcc: evil@x\r\n\r\nb'),
         ),
         throwsArgumentError,
       );

@@ -97,6 +97,39 @@ print(settings.oof?.state);
 client.dispose();
 ```
 
+### Persistent sync state
+
+Sync keys live in an `EasSyncStateStore` (in memory by default). Pass your
+own implementation to resume after a restart:
+
+```dart
+final client = EasClient(/* ... */, syncStateStore: MyDbSyncStateStore());
+```
+
+### Partial changes and MIME bytes
+
+`SyncResult.emailChanges` holds `EasEmailChange` items with only the
+properties the server sent (`read`, `flag`, `categories`, ... are `null`
+when unchanged). MIME is handled as bytes: `EasEmail.mime` (Body Type 4 or
+EAS 2.5 `MIMEData`) and `sendMail` / `smartReply` / `smartForward`
+(`mimeContent: utf8.encode(text)`).
+
+### Custom transport (raw HTTP/1.1)
+
+To run a command over your own socket (e.g. a Ping kept open by a
+tunneling proxy):
+
+```dart
+final ping = PingCommand(folders: [PingFolder(id: inboxId)], heartbeatInterval: 900);
+socket.add(client.buildRawRequest(ping)); // full HTTP/1.1 request
+// ... collect bytes until EasRawHttpParser.tryParse(bytes) != null
+final result = client.parseRawHttpResponse(ping, bytes);
+```
+
+`updateCredentials()` replaces the credentials of a live client. The
+`example/stand.dart` CLI probes a server for Ping/Sync interaction, MIME
+attachments, folder types, heartbeat limits and post-handshake TLS bytes.
+
 ## Protocol coverage
 
 Coverage by [MS-ASCMD](https://learn.microsoft.com/en-us/openspecs/exchange_server_protocols/ms-ascmd/) commands:
@@ -199,7 +232,7 @@ The package throws typed exceptions for key HTTP statuses:
 | `EasRedirectException` | HTTP 451 | Server requires URL switch (mailbox migration) |
 | `EasAccountException` | HTTP 456 / 457 | Account blocked / password expired |
 | `EasServiceUnavailableException` | HTTP 503 | Server busy or throttling; see `retryAfter` |
-| `EasCommandException` | HTTP 449, status 142–144 | Re-provisioning required (`requiresProvisioning`) |
+| `EasProvisioningRequiredException` | HTTP 449, status 142–144 | Re-provisioning required; call `reprovision()` and retry (subclass of `EasCommandException`) |
 | `EasCommandException` | other errors | Global status ≥ 101 (`easStatus`) or command failure |
 | `EasRemoteWipeException` | status 140, Provision | Server requests a remote wipe |
 | `EasPolicyNotAcceptedException` | Provision | Server requires applied policies |

@@ -322,7 +322,8 @@ void main() {
       expect(m.attachments.single.fileReference, 'a.txt');
       expect(m.attachments.single.estimatedSize, 3);
       expect(m.attachments.single.attOid, 'oid');
-      expect(m.mimeData, 'MIME');
+      expect(m.mimeData, 'MIME'.codeUnits);
+      expect(m.mime, 'MIME'.codeUnits);
       expect(m.mimeSize, 4);
       expect(m.mimeTruncated, isFalse);
     });

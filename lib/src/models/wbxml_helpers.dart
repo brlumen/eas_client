@@ -119,6 +119,18 @@ int protocolVersionValue(String version) {
   return major * 10 + minor;
 }
 
+/// Content of an element as bytes.
+extension WbxmlElementBytes on WbxmlElement {
+  /// Opaque data, the original bytes of a non-UTF-8 string, or the UTF-8
+  /// encoding of [WbxmlElement.text]; `null` for an empty element.
+  Uint8List? get contentBytes {
+    if (opaque != null) return opaque;
+    if (rawText != null) return rawText;
+    final t = text;
+    return t == null ? null : utf8.encode(t);
+  }
+}
+
 /// Read helpers for content-class elements.
 extension WbxmlReader on WbxmlElement {
   /// Text of child (opaque content is decoded as UTF-8).
@@ -147,14 +159,9 @@ extension WbxmlReader on WbxmlElement {
     return v == null ? null : DateTime.tryParse(v);
   }
 
-  /// Raw bytes: opaque data, or the UTF-8 text.
-  Uint8List? bytes(String ns, String tag) {
-    final el = findChild(ns, tag);
-    if (el == null) return null;
-    if (el.opaque != null) return el.opaque;
-    final t = el.text;
-    return t == null ? null : Uint8List.fromList(utf8.encode(t));
-  }
+  /// Raw bytes: opaque data, the original string bytes, or the UTF-8
+  /// text. Lossless for any string the decoder received.
+  Uint8List? bytes(String ns, String tag) => findChild(ns, tag)?.contentBytes;
 
   /// Text of a string-or-opaque child; opaque content is base64-encoded
   /// (used for binary IDs such as `Email2:ConversationId`).

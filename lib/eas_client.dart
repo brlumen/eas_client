@@ -15,6 +15,7 @@ export 'src/wbxml/code_pages/code_page_registry.dart';
 // Transport
 export 'src/transport/eas_credentials.dart';
 export 'src/transport/eas_http_client.dart';
+export 'src/transport/eas_raw_http.dart';
 export 'src/transport/device_id_generator.dart';
 export 'src/transport/autodiscover.dart';
 export 'src/transport/autodiscover_response.dart';
@@ -52,6 +53,7 @@ export 'src/models/eas_device_information.dart';
 export 'src/models/eas_global_status.dart';
 export 'src/models/eas_folder.dart';
 export 'src/models/eas_email.dart';
+export 'src/models/eas_email_change.dart';
 export 'src/models/eas_attachment.dart';
 export 'src/models/eas_body.dart';
 export 'src/models/eas_location.dart';
@@ -64,6 +66,7 @@ export 'src/models/eas_recurrence.dart';
 export 'src/models/eas_document_library_item.dart';
 export 'src/models/eas_exception.dart';
 export 'src/models/sync_state.dart';
+export 'src/models/sync_state_store.dart';
 
 // Serializers
 export 'src/serializers/attachment_serializer.dart';

@@ -1,3 +1,34 @@
+## Unreleased
+
+### Breaking changes
+
+- `EasEmail.mimeData` is `Uint8List?` (raw bytes) instead of `String?`
+- `sendMail`, `smartReply`, `smartForward` and `SendMailCommand` / `SmartReplyCommand` / `SmartForwardCommand` take `mimeContent` as `Uint8List` (sent unchanged); `ComposeMailCommand.mimeContent` is `Uint8List?`
+- `EasClient.resetSyncState` / `resetAllSyncStates` return `Future<void>`
+- HTTP 449 and global statuses 142/143/144 throw `EasProvisioningRequiredException` (a subclass of `EasCommandException`, so existing `on EasCommandException` handlers and `requiresProvisioning` keep working)
+
+### Added
+
+- `EasSyncStateStore` (FolderSync key + per-collection Sync keys, sync or async) and `InMemoryEasSyncStateStore` (default); `EasClient(syncStateStore:)`, `EasClient.autodiscover(syncStateStore:)`, `EasClient.syncStateStore`
+- `EasEmailChange` — partial Sync Change with nullable fields (`read`, `flag`, `categories`, `importance`, `lastVerbExecuted`, ...) and the raw `applicationData`; `SyncResult.emailChanges` / `smsChanges`
+- `EasEmail.mime` — MIME bytes from Body Type 4 or EAS 2.5 `MIMEData`; `EasBody.dataBytes` (Type 4)
+- Raw HTTP/1.1 for custom transports: `EasClient.buildRawRequest(cmd)`, `EasClient.parseRawHttpResponse(cmd, bytes)`, `EasCommand.prepare` / `handleResponse` / `buildRawRequest` / `parseRawHttpResponse`, `EasHttpClient.prepareCommand` / `send` / `acceptRawResponse`, `EasHttpRequest.toHttp11Bytes()`, `EasRawHttpParser` (Content-Length, chunked, 1xx, incremental `tryParse`)
+- `EasClient.updateCredentials` / `EasHttpClient.updateCredentials` (credentials are no longer final)
+- `EasClient.reprovision()` — Provision with `PolicyAckStatus.success`, stores the new policy key
+- `ComposeMailCommand.validateMimeHeaderBytes`
+- `WbxmlElement.rawText` — original bytes of a string that is not valid UTF-8
+- `example/stand.dart` — CLI probing Ping cancellation, MIME + Attachments, folder types, max heartbeat and post-handshake TLS bytes
+
+### Deprecated
+
+- `SyncResult.changedEmails` / `changedSms` — they fill missing properties with defaults (`read: false`, `subject: ''`); use `emailChanges` / `smsChanges`
+
+### Fixed
+
+- WBXML strings that are not valid UTF-8 (e.g. 8-bit MIME in `airsyncbase:Data`) no longer fail the whole response; they are decoded leniently and kept losslessly in `rawText`
+- Server `host:port` now works with the base64 query string too (it threw `FormatException`)
+- Sync with an empty HTTP 200 body is mapped via `parseEmptyResponse` (also for raw responses)
+
 ## 0.1.0-alpha.3
 
 - Support `xml` 7.x (`^7.0.1`)

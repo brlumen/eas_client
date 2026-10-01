@@ -14,6 +14,7 @@ import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 
 import 'eas_credentials.dart';
+import 'eas_raw_http.dart';
 
 /// Content type of a WBXML request/response body.
 const easWbxmlContentType = 'application/vnd.ms-sync.wbxml';
@@ -197,8 +198,11 @@ class EasServerNotice {
 
 /// HTTP client for EAS protocol communication.
 class EasHttpClient {
+  /// Server host name, optionally with a port (`host:port`).
   final String server;
-  final EasCredentials credentials;
+
+  /// Credentials applied to every request; see [updateCredentials].
+  EasCredentials credentials;
   final http.Client _httpClient;
 
   /// EAS protocol version (e.g., '16.1').
@@ -409,7 +413,32 @@ class EasHttpClient {
     String contentType = easWbxmlContentType,
     bool saveInSent = false,
     bool acceptMultiPart = false,
-  }) async {
+  }) => send(
+    prepareCommand(
+      command,
+      body,
+      extraHeaders: extraHeaders,
+      parameters: parameters,
+      contentType: contentType,
+      saveInSent: saveInSent,
+      acceptMultiPart: acceptMultiPart,
+    ),
+    timeout: timeout,
+  );
+
+  /// Build the request [sendCommand] would send (URI with plain or base64
+  /// query, protocol/policy/credential headers, cookies) without sending
+  /// it. Use [EasHttpRequest.toHttp11Bytes] to run it over a custom socket
+  /// and [acceptRawResponse] to parse the answer.
+  EasHttpRequest prepareCommand(
+    String command,
+    Uint8List? body, {
+    Map<String, String>? extraHeaders,
+    Map<String, String> parameters = const {},
+    String contentType = easWbxmlContentType,
+    bool saveInSent = false,
+    bool acceptMultiPart = false,
+  }) {
     for (final name in parameters.keys) {
       if (!_paramTags.containsKey(name)) {
         throw ArgumentError.value(name, 'parameters', 'Unknown parameter');
@@ -421,14 +450,10 @@ class EasHttpClient {
       saveInSent: saveInSent,
       acceptMultiPart: acceptMultiPart,
     );
+    // Uri.https parses `host:port`; the base64 query replaces the plain one.
     final uri = base64Query != null
-        ? Uri(
-            scheme: 'https',
-            host: server,
-            path: '/Microsoft-Server-ActiveSync',
-            query: base64Query,
-          )
-        : Uri.https(server, '/Microsoft-Server-ActiveSync', {
+        ? _endpoint().replace(query: base64Query)
+        : _endpoint({
             'Cmd': command,
             'User': _extractUsername(),
             'DeviceId': deviceId,
@@ -449,14 +474,28 @@ class EasHttpClient {
       if (policyKey != null && !encodedKey) 'X-MS-PolicyKey': policyKey!,
       if (acceptMultiPart && !base64) 'MS-ASAcceptMultiPart': 'T',
     });
+    return EasHttpRequest(
+      command: command,
+      method: 'POST',
+      uri: uri,
+      headers: headers,
+      body: body,
+    );
+  }
 
+  /// Send a request built by [prepareCommand].
+  ///
+  /// [timeout] overrides [commandTimeout]. Throws
+  /// [EasResponseTooLargeException] if the response exceeds
+  /// [maxResponseSize].
+  Future<EasResponse> send(EasHttpRequest prepared, {Duration? timeout}) async {
     // Retry once on connection-closed errors (stale keep-alive).
     http.StreamedResponse? streamedResponse;
     for (var attempt = 0; attempt < 2; attempt++) {
-      final request = http.Request('POST', uri);
-      request.headers.addAll(headers);
-      if (body != null) {
-        request.bodyBytes = body;
+      final request = http.Request(prepared.method, prepared.uri);
+      request.headers.addAll(prepared.headers);
+      if (prepared.body != null) {
+        request.bodyBytes = prepared.body!;
       }
       // Disable keep-alive on retry to force a fresh connection.
       if (attempt > 0) {
@@ -476,22 +515,48 @@ class EasHttpClient {
       }
     }
 
-    final response = await _readResponse(streamedResponse!);
-    final notice = EasServerNotice.fromResponse(command, response);
-    if (notice != null) _notices.add(notice);
+    return _accept(prepared.command, await _readResponse(streamedResponse!));
+  }
+
+  /// Parse a raw HTTP/1.1 response to a request of [command] received
+  /// over a custom socket (see [prepareCommand]) and apply it to the
+  /// client state like [send] does: cookies, server version and
+  /// [notices]. Throws [FormatException] if [bytes] do not hold a complete
+  /// response and [EasResponseTooLargeException] above [maxResponseSize].
+  EasResponse acceptRawResponse(String command, Uint8List bytes) => _accept(
+    command,
+    EasRawHttpParser.parse(bytes, maxBodySize: maxResponseSize),
+  );
+
+  /// Replace the credentials used by subsequent requests (e.g. after a
+  /// password change). Requests already in flight are not affected.
+  void updateCredentials(EasCredentials credentials) {
+    this.credentials = credentials;
+  }
+
+  Uri _endpoint([Map<String, String>? query]) =>
+      Uri.https(server, '/Microsoft-Server-ActiveSync', query);
+
+  /// Store cookies and the server version; emit a notice for [command].
+  EasResponse _accept(String? command, EasResponse response) {
+    _storeCookies(response.headers['set-cookie']);
+    serverVersion = response.serverVersion ?? serverVersion;
+    if (command != null) {
+      final notice = EasServerNotice.fromResponse(command, response);
+      if (notice != null) _notices.add(notice);
+    }
     return response;
   }
 
   /// Send HTTP OPTIONS request to discover server capabilities.
   Future<EasResponse> sendOptions() async {
-    final uri = Uri.https(server, '/Microsoft-Server-ActiveSync');
-    final request = http.Request('OPTIONS', uri);
+    final request = http.Request('OPTIONS', _endpoint());
     request.headers.addAll(credentials.applyToHeaders(_commonHeaders()));
 
     final streamedResponse = await _httpClient
         .send(request)
         .timeout(commandTimeout);
-    return _readResponse(streamedResponse);
+    return _accept(null, await _readResponse(streamedResponse));
   }
 
   /// Send a raw MIME command (SendMail, SmartReply, SmartForward) as used
@@ -528,17 +593,13 @@ class EasHttpClient {
     }
 
     final body = await _readBodyWithLimit(streamed.stream, maxResponseSize);
-    final headers = {
-      for (final e in streamed.headers.entries) e.key.toLowerCase(): e.value,
-    };
-    _storeCookies(headers['set-cookie']);
-    final response = EasResponse(
+    return EasResponse(
       statusCode: streamed.statusCode,
-      headers: headers,
+      headers: {
+        for (final e in streamed.headers.entries) e.key.toLowerCase(): e.value,
+      },
       body: body,
     );
-    serverVersion = response.serverVersion ?? serverVersion;
-    return response;
   }
 
   /// Store `name=value` pairs of (possibly comma-joined) `Set-Cookie`
@@ -688,12 +749,10 @@ class EasHttpClient {
       ..add(value);
   }
 
-  String _extractUsername() {
-    if (credentials is BasicCredentials) {
-      return (credentials as BasicCredentials).username;
-    }
-    return '';
-  }
+  String _extractUsername() => switch (credentials) {
+    BasicCredentials(:final username) => username,
+    _ => '',
+  };
 
   /// Read streamed body enforcing [limit] bytes.
   static Future<Uint8List> _readBodyWithLimit(

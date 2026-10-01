@@ -46,19 +46,23 @@ import '../commands/validate_cert_command.dart';
 import '../models/eas_email.dart';
 import '../models/eas_task.dart';
 import '../models/server_info.dart';
-import '../models/sync_state.dart';
+import '../models/sync_state_store.dart';
 import '../transport/autodiscover.dart';
 import '../transport/dns_srv_resolver.dart';
 import '../transport/eas_credentials.dart';
 import '../transport/eas_http_client.dart';
+import '../transport/eas_raw_http.dart';
 import '../wbxml/wbxml_document.dart';
 
 /// High-level EAS client.
 class EasClient {
   final EasHttpClient _httpClient;
-  String _folderSyncKey = '0';
-  final Map<String, SyncState> _syncStates = {};
 
+  /// FolderSync and per-collection Sync keys.
+  final EasSyncStateStore syncStateStore;
+
+  /// [syncStateStore] keeps the sync keys (in memory by default); pass a
+  /// persistent implementation to resume synchronization after a restart.
   EasClient({
     required String server,
     required EasCredentials credentials,
@@ -70,7 +74,9 @@ class EasClient {
     int maxResponseSize = 25 * 1024 * 1024,
     bool useBase64QueryString = false,
     http.Client? httpClient,
-  }) : _httpClient = EasHttpClient(
+    EasSyncStateStore? syncStateStore,
+  }) : syncStateStore = syncStateStore ?? InMemoryEasSyncStateStore(),
+       _httpClient = EasHttpClient(
          server: server,
          credentials: credentials,
          protocolVersion: protocolVersion,
@@ -104,6 +110,7 @@ class EasClient {
     bool enableHttpRedirectStep = false,
     DnsSrvResolver? srvResolver,
     AutodiscoverRedirectConfirmation? confirmRedirect,
+    EasSyncStateStore? syncStateStore,
   }) async {
     final credentials = BasicCredentials(
       username: username ?? email,
@@ -133,6 +140,7 @@ class EasClient {
         maxResponseSize: maxResponseSize,
         useBase64QueryString: useBase64QueryString,
         httpClient: httpClient,
+        syncStateStore: syncStateStore,
       );
     } finally {
       if (httpClient == null) discovery.dispose();
@@ -141,6 +149,17 @@ class EasClient {
 
   /// Underlying HTTP client for advanced usage.
   EasHttpClient get httpClient => _httpClient;
+
+  /// Replace the credentials used by subsequent requests (e.g. after the
+  /// user changed the password).
+  void updateCredentials(EasCredentials credentials) =>
+      _httpClient.updateCredentials(credentials);
+
+  Future<String> _folderSyncKey() async =>
+      await syncStateStore.getFolderSyncKey() ?? '0';
+
+  Future<String> _syncKey(String collectionId) async =>
+      await syncStateStore.getSyncKey(collectionId) ?? '0';
 
   // ─── Core ─────────────────────────────────────────────────────────────────
 
@@ -178,6 +197,20 @@ class EasClient {
   /// Acknowledge a remote wipe directive received from [provision]
   /// (MS-ASPROV). [type] must match [EasRemoteWipeException.type];
   /// [status] reports whether the consumer's wipe succeeded.
+  /// Re-run Provision after [EasProvisioningRequiredException] (HTTP 449,
+  /// global status 142/143/144): acknowledges the policies with
+  /// [PolicyAckStatus.success] and stores the new policy key for
+  /// subsequent commands. Returns the policy (`null` if the server no
+  /// longer requires provisioning).
+  ///
+  /// The library does not apply policies; a consumer that cannot honor
+  /// them should call [provision] with another [PolicyAckStatus].
+  Future<EasPolicy?> reprovision({EasDeviceInformation? deviceInformation}) =>
+      provision(
+        policyAckStatus: PolicyAckStatus.success,
+        deviceInformation: deviceInformation,
+      );
+
   Future<void> acknowledgeRemoteWipe({
     required RemoteWipeType type,
     required RemoteWipeAckStatus status,
@@ -204,14 +237,12 @@ class EasClient {
   /// hierarchy is re-synced once; the consumer should then replace its
   /// folder list and reset per-folder sync states.
   Future<FolderSyncResult> syncFolders() async {
-    var result = await FolderSyncCommand(
-      syncKey: _folderSyncKey,
-    ).execute(_httpClient);
-    if (result.needsReset && _folderSyncKey != '0') {
-      _folderSyncKey = '0';
+    final key = await _folderSyncKey();
+    var result = await FolderSyncCommand(syncKey: key).execute(_httpClient);
+    if (result.needsReset && key != '0') {
       result = await FolderSyncCommand().execute(_httpClient);
     }
-    _folderSyncKey = result.syncKey;
+    await syncStateStore.setFolderSyncKey(result.syncKey);
     return result;
   }
 
@@ -224,13 +255,13 @@ class EasClient {
     EasFolderType type = EasFolderType.userMail,
   }) async {
     final command = FolderCreateCommand(
-      syncKey: _folderSyncKey,
+      syncKey: await _folderSyncKey(),
       parentId: parentId,
       displayName: displayName,
       type: type,
     );
     final result = await command.execute(_httpClient);
-    _folderSyncKey = result.syncKey;
+    await syncStateStore.setFolderSyncKey(result.syncKey);
     if (!result.isSuccess) {
       throw EasCommandException(
         command: 'FolderCreate',
@@ -244,11 +275,11 @@ class EasClient {
   /// Delete a folder from the server.
   Future<void> deleteFolder(String serverId) async {
     final command = FolderDeleteCommand(
-      syncKey: _folderSyncKey,
+      syncKey: await _folderSyncKey(),
       serverId: serverId,
     );
     final result = await command.execute(_httpClient);
-    _folderSyncKey = result.syncKey;
+    await syncStateStore.setFolderSyncKey(result.syncKey);
     if (!result.isSuccess) {
       throw EasCommandException(
         command: 'FolderDelete',
@@ -267,13 +298,13 @@ class EasClient {
     // Determine current parent — we need it for FolderUpdate.
     // If not provided, attempt with '0' (server typically ignores it on rename-only).
     final command = FolderUpdateCommand(
-      syncKey: _folderSyncKey,
+      syncKey: await _folderSyncKey(),
       serverId: serverId,
       displayName: newDisplayName,
       parentId: newParentId ?? '0',
     );
     final result = await command.execute(_httpClient);
-    _folderSyncKey = result.syncKey;
+    await syncStateStore.setFolderSyncKey(result.syncKey);
     if (!result.isSuccess) {
       throw EasCommandException(
         command: 'FolderUpdate',
@@ -297,13 +328,8 @@ class EasClient {
     int? bodyTruncationSize,
     SyncFilterType? filterType,
   }) async {
-    final state = _syncStates.putIfAbsent(
-      folderId,
-      () => SyncState(collectionId: folderId),
-    );
-
     final command = SyncCommand(
-      syncKey: state.syncKey,
+      syncKey: await _syncKey(folderId),
       collectionId: folderId,
       windowSize: windowSize,
       bodyType: bodyType,
@@ -316,7 +342,7 @@ class EasClient {
     final result = await command.execute(_httpClient);
 
     if (result.needsReset) {
-      state.syncKey = '0';
+      await syncStateStore.removeSyncKey(folderId);
       final retryCommand = SyncCommand(
         syncKey: '0',
         collectionId: folderId,
@@ -328,17 +354,17 @@ class EasClient {
         protocolVersion: _httpClient.protocolVersion,
       );
       final retryResult = await retryCommand.execute(_httpClient);
-      state.syncKey = retryResult.syncKey;
+      await syncStateStore.setSyncKey(folderId, retryResult.syncKey);
       return retryResult;
     }
 
-    state.syncKey = result.syncKey;
+    await syncStateStore.setSyncKey(folderId, result.syncKey);
     return result;
   }
 
   /// Sync several folders in a single Sync request.
   ///
-  /// Sync keys come from (and are stored to) the internal per-folder state;
+  /// Sync keys come from (and are stored to) [syncStateStore];
   /// the `syncKey` of each [SyncCollection] is ignored. A collection that
   /// answers Status 3 is reset to SyncKey '0' (call again to re-initialize).
   /// Check [MultiSyncResult.needsFolderSync] (Status 12) and run
@@ -352,12 +378,7 @@ class EasClient {
       collections: [
         for (final c in collections)
           c.withSyncKey(
-            _syncStates
-                .putIfAbsent(
-                  c.collectionId,
-                  () => SyncState(collectionId: c.collectionId),
-                )
-                .syncKey,
+            await _syncKey(c.collectionId),
             protocolVersion: _httpClient.protocolVersion,
           ),
       ],
@@ -365,8 +386,14 @@ class EasClient {
       emptyRequest: emptyRequest,
     );
     final result = await command.execute(_httpClient);
+    final requested = {for (final c in collections) c.collectionId};
     for (final r in result.collections) {
-      _syncStates[r.collectionId]?.syncKey = r.needsReset ? '0' : r.syncKey;
+      if (!requested.contains(r.collectionId)) continue;
+      if (r.needsReset) {
+        await syncStateStore.removeSyncKey(r.collectionId);
+      } else {
+        await syncStateStore.setSyncKey(r.collectionId, r.syncKey);
+      }
     }
     return result;
   }
@@ -410,7 +437,7 @@ class EasClient {
       stopOnEmptyResponse: stopOnEmptyResponse,
       filterType: filterType,
       getAdded: (r) => r.addedEmails,
-      getChanged: (r) => r.changedEmails,
+      getChanged: (r) => r.emailChanges,
     );
   }
 
@@ -502,7 +529,7 @@ class EasClient {
     bool stopOnEmptyResponse = true,
     SyncFilterType? filterType,
     required List<T> Function(SyncResult) getAdded,
-    required List<T> Function(SyncResult) getChanged,
+    required List<Object> Function(SyncResult) getChanged,
   }) async {
     final all = <T>[];
 
@@ -576,8 +603,8 @@ class EasClient {
     required List<SyncClientCommand> commands,
     int? conflict,
   }) async {
-    final state = _syncStates[folderId];
-    if (state == null || state.syncKey == '0') {
+    final syncKey = await _syncKey(folderId);
+    if (syncKey == '0') {
       throw EasCommandException(
         command: 'Sync',
         message:
@@ -587,7 +614,7 @@ class EasClient {
     }
 
     final command = SyncCommand(
-      syncKey: state.syncKey,
+      syncKey: syncKey,
       collectionId: folderId,
       contentType: contentType,
       clientCommands: commands,
@@ -596,7 +623,7 @@ class EasClient {
     );
 
     final result = await command.execute(_httpClient);
-    state.syncKey = result.syncKey;
+    await syncStateStore.setSyncKey(folderId, result.syncKey);
     return result;
   }
 
@@ -940,8 +967,7 @@ class EasClient {
     bool? conversationMode,
     int? maxItems,
   }) async {
-    final state = _syncStates[folderId];
-    final syncKey = state?.syncKey ?? '0';
+    final syncKey = await _syncKey(folderId);
     final command = GetItemEstimateCommand.single(
       collectionId: folderId,
       syncKey: syncKey,
@@ -1129,11 +1155,12 @@ class EasClient {
   /// Send an email.
   ///
   /// [clientId] — unique ID to prevent duplicates.
-  /// [mimeContent] — full MIME content of the email.
+  /// [mimeContent] — full MIME content of the email as raw bytes (sent
+  /// unchanged; use `utf8.encode` for a string).
   /// [accountId] — send-as account (EAS 14.1+, Settings UserInformation).
   Future<void> sendMail({
     required String clientId,
-    required String mimeContent,
+    required Uint8List mimeContent,
     bool saveInSentItems = true,
     String? templateId,
     String? accountId,
@@ -1158,7 +1185,7 @@ class EasClient {
     String? collectionId,
     String? longId,
     DateTime? instanceId,
-    required String mimeContent,
+    required Uint8List mimeContent,
     bool saveInSentItems = true,
     bool replaceMime = false,
     String? templateId,
@@ -1188,7 +1215,7 @@ class EasClient {
     String? collectionId,
     String? longId,
     DateTime? instanceId,
-    required String mimeContent,
+    required Uint8List mimeContent,
     bool saveInSentItems = true,
     bool replaceMime = false,
     String? templateId,
@@ -1543,18 +1570,32 @@ class EasClient {
   Future<T> execute<T>(EasCommand<T> command, {Duration? timeout}) =>
       command.execute(_httpClient, timeout: timeout);
 
+  // ─── Raw HTTP (custom transport) ──────────────────────────────────────────
+
+  /// [command] as a complete HTTP/1.1 request with this client's transport
+  /// state (URI query, credentials, protocol version, policy key, cookies),
+  /// for sending over a socket the consumer manages (e.g. a Ping tunneled
+  /// through a proxy). Parse the answer with [parseRawHttpResponse].
+  Uint8List buildRawRequest(EasCommand<Object?> command) =>
+      command.buildRawRequest(_httpClient);
+
+  /// Parse a raw HTTP/1.1 response (Content-Length or chunked body) to a
+  /// [buildRawRequest] of [command], exactly as [execute] would: HTTP and
+  /// global status errors throw, cookies and notices are applied.
+  ///
+  /// Throws [FormatException] if [bytes] do not hold a complete response;
+  /// use [EasRawHttpParser.tryParse] to detect completeness while reading.
+  T parseRawHttpResponse<T>(EasCommand<T> command, Uint8List bytes) =>
+      command.parseRawHttpResponse(_httpClient, bytes);
+
   // ─── State management ─────────────────────────────────────────────────────
 
-  /// Reset sync state for a folder.
-  void resetSyncState(String folderId) {
-    _syncStates.remove(folderId);
-  }
+  /// Reset sync state for a folder (next sync starts from SyncKey 0).
+  Future<void> resetSyncState(String folderId) async =>
+      syncStateStore.removeSyncKey(folderId);
 
-  /// Reset all sync states.
-  void resetAllSyncStates() {
-    _syncStates.clear();
-    _folderSyncKey = '0';
-  }
+  /// Reset all sync states, including the FolderSync key.
+  Future<void> resetAllSyncStates() async => syncStateStore.clear();
 
   /// Dispose of resources.
   void dispose() {

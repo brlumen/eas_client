@@ -18,6 +18,7 @@ import '../models/eas_body.dart';
 import '../models/eas_calendar_event.dart';
 import '../models/eas_contact.dart';
 import '../models/eas_email.dart';
+import '../models/eas_email_change.dart';
 import '../models/eas_note.dart';
 import '../models/eas_task.dart';
 import '../models/wbxml_helpers.dart';
@@ -120,11 +121,25 @@ class SyncResult {
 
   // Email
   final List<EasEmail> addedEmails;
+
+  /// Email changes as full [EasEmail] objects: properties missing from
+  /// the Change are filled with defaults (`read: false`, `subject: ''`),
+  /// which is wrong for partial changes.
+  @Deprecated('Use emailChanges: a Change carries only changed properties')
   final List<EasEmail> changedEmails;
+
+  /// Email changes with only the properties present in the response.
+  final List<EasEmailChange> emailChanges;
 
   // SMS (EAS 14.0+, class `SMS`)
   final List<EasEmail> addedSms;
+
+  /// See [changedEmails].
+  @Deprecated('Use smsChanges: a Change carries only changed properties')
   final List<EasEmail> changedSms;
+
+  /// SMS changes with only the properties present in the response.
+  final List<EasEmailChange> smsChanges;
 
   // Calendar
   final List<EasCalendarEvent> addedCalendarEvents;
@@ -174,9 +189,11 @@ class SyncResult {
     required this.collectionId,
     this.className,
     this.addedEmails = const [],
-    this.changedEmails = const [],
+    @Deprecated('Use emailChanges') this.changedEmails = const [],
+    this.emailChanges = const [],
     this.addedSms = const [],
-    this.changedSms = const [],
+    @Deprecated('Use smsChanges') this.changedSms = const [],
+    this.smsChanges = const [],
     this.addedCalendarEvents = const [],
     this.changedCalendarEvents = const [],
     this.addedTasks = const [],
@@ -839,16 +856,12 @@ class MultiSyncCommand extends EasCommand<MultiSyncResult> {
       }
       // Fall through: full request (also maps HTTP errors uniformly).
     }
-    try {
-      return await super.execute(client, timeout: timeout);
-    } on EasCommandException catch (e) {
-      // HTTP 200 with an empty body — no changes (MS-ASCMD 2.2.1.21).
-      if (e.statusCode == 200 && e.easStatus == null) {
-        return MultiSyncResult.noChanges;
-      }
-      rethrow;
-    }
+    return super.execute(client, timeout: timeout);
   }
+
+  /// HTTP 200 with an empty body — no changes (MS-ASCMD 2.2.1.21).
+  @override
+  MultiSyncResult parseEmptyResponse() => MultiSyncResult.noChanges;
 
   @override
   MultiSyncResult parseResponse(WbxmlDocument response) {
@@ -924,6 +937,8 @@ class MultiSyncCommand extends EasCommand<MultiSyncResult> {
       changedEmails: pick<EasEmail>(changed, SyncContentType.email),
       addedSms: pick<EasEmail>(added, SyncContentType.sms),
       changedSms: pick<EasEmail>(changed, SyncContentType.sms),
+      emailChanges: _emailChanges(commandsOf('Change'), typeOf, email: true),
+      smsChanges: _emailChanges(commandsOf('Change'), typeOf, email: false),
       addedCalendarEvents: pick<EasCalendarEvent>(
         added,
         SyncContentType.calendar,
@@ -985,6 +1000,22 @@ class MultiSyncCommand extends EasCommand<MultiSyncResult> {
       ],
     );
   }
+
+  /// Partial email/SMS changes of the Change [commands].
+  static List<EasEmailChange> _emailChanges(
+    List<WbxmlElement> commands,
+    SyncContentType Function(WbxmlElement) typeOf, {
+    required bool email,
+  }) => [
+    for (final e in commands)
+      if (typeOf(e) == (email ? SyncContentType.email : SyncContentType.sms))
+        EasEmailChange.fromApplicationData(
+          e.str('AirSync', 'ServerId') ?? '',
+          e.findChild('AirSync', 'ApplicationData') ??
+              WbxmlElement(namespace: 'AirSync', tag: 'ApplicationData'),
+          className: e.str('AirSync', 'Class'),
+        ),
+  ];
 
   static (SyncContentType, Object) _typed(
     SyncContentType type,
@@ -1107,6 +1138,9 @@ class SyncCommand extends EasCommand<SyncResult> {
   @override
   SyncResult parseResponse(WbxmlDocument response) =>
       _select(_multi.parseResponse(response));
+
+  @override
+  SyncResult parseEmptyResponse() => _select(MultiSyncResult.noChanges);
 
   @override
   Future<SyncResult> execute(EasHttpClient client, {Duration? timeout}) async =>
