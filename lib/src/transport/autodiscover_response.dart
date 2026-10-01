@@ -181,9 +181,7 @@ class AutodiscoverResponse {
     } catch (_) {
       return null;
     }
-    final response =
-        doc.findAllElements('Response', namespaceUri: '*').firstOrNull ??
-        doc.rootElement;
+    final response = _all(doc, 'Response').firstOrNull ?? doc.rootElement;
 
     final user = _child(response, 'User');
     final action = _child(response, 'Action');
@@ -192,7 +190,7 @@ class AutodiscoverResponse {
     final servers = <AutodiscoverServer>[];
     final legacyHosts = <String>[];
     for (final s
-        in settings?.findElements('Server', namespaceUri: '*') ??
+        in (settings == null ? null : _children(settings, 'Server')) ??
             const <xml.XmlElement>[]) {
       servers.add(
         AutodiscoverServer(
@@ -204,7 +202,7 @@ class AutodiscoverResponse {
       );
     }
     // Legacy/non-standard: <Server>hostname</Server> without children.
-    for (final s in doc.findAllElements('Server', namespaceUri: '*')) {
+    for (final s in _all(doc, 'Server')) {
       if (s.childElements.isEmpty) {
         final t = s.innerText.trim();
         if (t.isNotEmpty) legacyHosts.add(t);
@@ -215,7 +213,7 @@ class AutodiscoverResponse {
     var redirect = action == null ? null : _text(action, 'Redirect');
     redirect ??= action == null ? null : _text(action, 'RedirectAddr');
     if (redirect == null) {
-      final addr = doc.findAllElements('RedirectAddr', namespaceUri: '*');
+      final addr = _all(doc, 'RedirectAddr');
       if (addr.isNotEmpty) redirect = _nonEmpty(addr.first.innerText);
     }
 
@@ -244,8 +242,18 @@ class AutodiscoverResponse {
     );
   }
 
+  // Matching by local name in any namespace without the `namespace:` /
+  // `namespaceUri:` parameter, which xml 6.x and 7.x name differently.
+  static Iterable<xml.XmlElement> _all(xml.XmlNode node, String name) =>
+      node.descendantElements.where((e) => e.name.local == name);
+
+  static Iterable<xml.XmlElement> _children(
+    xml.XmlElement parent,
+    String name,
+  ) => parent.childElements.where((e) => e.name.local == name);
+
   static xml.XmlElement? _child(xml.XmlElement parent, String name) =>
-      parent.findElements(name, namespaceUri: '*').firstOrNull;
+      _children(parent, name).firstOrNull;
 
   static String? _text(xml.XmlElement parent, String name) {
     final el = _child(parent, name);
