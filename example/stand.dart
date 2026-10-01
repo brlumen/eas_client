@@ -3,10 +3,21 @@
 //
 //   dart run example/stand.dart --server mail.example.com[:port] \
 //       --user alice --password secret [--domain CORP] [--device-id Stand1]
+//       [--insecure] [--version 14.1] [--trace] [--send]
+//
+// --version forces the protocol version (default: highest of 16.1..14.0).
+// --trace dumps every HTTP exchange (decoded WBXML, response headers) to
+// stderr; the Authorization header and the User query parameter are omitted.
+// --send adds experiment (a/SendMail): the stand mails one short message to
+// the mailbox itself (not saved in Sent Items); without it the stand only
+// reads.
+// --insecure skips TLS certificate verification (test servers with a
+// self-signed certificate or a hostname mismatch only).
 //
 // Experiments:
-//   (a) does a Sync / FolderSync from the same DeviceId complete a pending
-//       Ping (heartbeat 300 s, issued 5 s after the Ping)?
+//   (a) does a Sync / FolderSync (/ SendMail with --send) from the same
+//       DeviceId complete a pending Ping (heartbeat 300 s, issued 5 s after
+//       the Ping)?
 //   (b) with Body Type 4 (MIME, MIMESupport 2), are airsyncbase:Attachments
 //       (FileReference) returned too?
 //   (c) folder list with types; Junk candidates
@@ -23,6 +34,17 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:eas_client/eas_client.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/io_client.dart';
+
+/// Skip TLS certificate verification (`--insecure`).
+var _insecure = false;
+
+/// Protocol version forced by `--version`.
+String? _forcedVersion;
+
+/// Run the SendMail experiment (`--send`).
+var _send = false;
 
 Future<void> main(List<String> argv) async {
   final args = _parseArgs(argv);
@@ -32,13 +54,20 @@ Future<void> main(List<String> argv) async {
   if (server == null || user == null || password == null) {
     stderr.writeln(
       'Usage: dart run example/stand.dart --server HOST[:PORT] --user USER '
-      '--password PASS [--domain DOMAIN] [--device-id ID]',
+      '--password PASS [--domain DOMAIN] [--device-id ID] [--insecure] '
+      '[--version VER] [--trace] [--send]',
     );
     exitCode = 64;
     return;
   }
   final domain = args['domain'];
   final deviceId = args['device-id'] ?? 'EasClientStand1';
+  _insecure = args.containsKey('insecure');
+  _forcedVersion = args['version'];
+  _send = args.containsKey('send');
+  final http.Client inner = _insecure
+      ? IOClient(HttpClient()..badCertificateCallback = (_, _, _) => true)
+      : http.Client();
   final client = EasClient(
     server: server,
     credentials: BasicCredentials(
@@ -47,6 +76,7 @@ Future<void> main(List<String> argv) async {
     ),
     deviceId: deviceId,
     deviceType: 'EasClientStand',
+    httpClient: args.containsKey('trace') ? _TraceClient(inner) : inner,
   );
   final report = _Report();
   try {
@@ -67,8 +97,10 @@ Map<String, String> _parseArgs(List<String> argv) {
     final eq = a.indexOf('=');
     if (eq > 0) {
       out[a.substring(2, eq)] = a.substring(eq + 1);
-    } else if (i + 1 < argv.length) {
+    } else if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) {
       out[a.substring(2)] = argv[++i];
+    } else {
+      out[a.substring(2)] = 'true';
     }
   }
   return out;
@@ -90,10 +122,12 @@ class _Report {
 Future<void> _run(EasClient client, String server, _Report r) async {
   r.section('Setup');
   final info = await client.discoverCapabilities();
-  final version = ['16.1', '16.0', '14.1', '14.0'].firstWhere(
-    info.supportedVersions.contains,
-    orElse: () => client.httpClient.protocolVersion,
-  );
+  final version =
+      _forcedVersion ??
+      ['16.1', '16.0', '14.1', '14.0'].firstWhere(
+        info.supportedVersions.contains,
+        orElse: () => client.httpClient.protocolVersion,
+      );
   client.httpClient.protocolVersion = version;
   r.line(
     'Server versions: ${info.supportedVersions.join(', ')}; using $version',
@@ -114,9 +148,15 @@ Future<void> _run(EasClient client, String server, _Report r) async {
 
   _folders(all, r);
   await _mimeAttachments(client, inbox, r);
-  for (final interfering in ['Sync', 'FolderSync']) {
-    await _pingCancellation(client, server, inbox, interfering, r);
-  }
+  await _pingCancellation(client, server, inbox, 'Sync', r, () async {
+    final s = await client.syncFolder(inbox.serverId, windowSize: 1);
+    return 'status ${s.status}';
+  });
+  await _pingCancellation(client, server, inbox, 'FolderSync', r, () async {
+    final f = await client.syncFolders();
+    return 'status ${f.status}';
+  });
+  if (_send) await _sendMailVsPing(client, server, all, r);
   await _maxHeartbeat(client, server, inbox, r);
   await _tlsIdleBytes(client, server, inbox, r);
 }
@@ -224,16 +264,20 @@ Future<void> _mimeAttachments(
 
 // ─── (a) Ping cancellation ────────────────────────────────────────────────
 
+/// Pings [folder], runs [interfere] 5 s later and reports whether the
+/// pending Ping completes because of it.
 Future<void> _pingCancellation(
   EasClient client,
   String server,
-  EasFolder inbox,
+  EasFolder folder,
   String interfering,
   _Report r,
+  Future<String> Function() interfere,
 ) async {
   r.section('(a) Pending Ping vs $interfering from the same DeviceId');
+  r.line('Ping folder: "${folder.displayName}" (id ${folder.serverId})');
   final ping = PingCommand(
-    folders: [PingFolder(id: inbox.serverId)],
+    folders: [PingFolder(id: folder.serverId)],
     heartbeatInterval: 300,
   );
   final tunnel = await _Tunnel.open(server);
@@ -250,13 +294,7 @@ Future<void> _pingCancellation(
     }
 
     final started = tunnel.clock.elapsed;
-    if (interfering == 'Sync') {
-      final s = await client.syncFolder(inbox.serverId, windowSize: 1);
-      r.line('Sync done: status ${s.status}');
-    } else {
-      final f = await client.syncFolders();
-      r.line('FolderSync done: status ${f.status}');
-    }
+    r.line('$interfering done: ${await interfere()}');
     final commandDone = tunnel.clock.elapsed;
 
     final response = await tunnel.readResponse(const Duration(seconds: 60));
@@ -277,6 +315,51 @@ Future<void> _pingCancellation(
   } finally {
     await tunnel.close();
   }
+}
+
+/// (a/SendMail): Ping on Drafts — a folder the message does not touch (it
+/// lands in the Inbox and is not saved in Sent Items), so a completed Ping
+/// is caused by the SendMail itself, not by a folder change.
+Future<void> _sendMailVsPing(
+  EasClient client,
+  String server,
+  List<EasFolder> folders,
+  _Report r,
+) async {
+  final drafts = folders.firstWhere(
+    (f) => f.type == EasFolderType.defaultDrafts,
+  );
+  final settings = await client.getSettings();
+  final self = settings.userInfo?.emailAddress;
+  if (self == null) {
+    r.section('(a) Pending Ping vs SendMail from the same DeviceId');
+    r.line('SKIPPED: the server returned no SMTP address for the user.');
+    return;
+  }
+  // A Ping on a folder without a current sync state answers at once with
+  // changes, so bring Drafts up to date first.
+  await client.syncFolder(drafts.serverId); // SyncKey 0 → initial key
+  SyncResult primed;
+  do {
+    primed = await client.syncFolder(drafts.serverId);
+  } while (primed.moreAvailable);
+  final clientId = 'stand${DateTime.now().millisecondsSinceEpoch}';
+  final mime =
+      'From: <$self>\r\n'
+      'To: <$self>\r\n'
+      'Subject: EAS stand SendMail probe $clientId\r\n'
+      'MIME-Version: 1.0\r\n'
+      'Content-Type: text/plain; charset=utf-8\r\n'
+      '\r\n'
+      'Sent by eas_client example/stand.dart (experiment a/SendMail).\r\n';
+  await _pingCancellation(client, server, drafts, 'SendMail', r, () async {
+    await client.sendMail(
+      clientId: clientId,
+      mimeContent: Uint8List.fromList(mime.codeUnits),
+      saveInSentItems: false,
+    );
+    return 'sent to self ($clientId)';
+  });
 }
 
 String _describePing(EasClient client, PingCommand ping, Uint8List raw) {
@@ -382,10 +465,13 @@ Future<void> _tlsIdleBytes(
           : 'HTTP response within ${window.inSeconds} s: '
                 '${_describePing(client, ping, response)}',
     );
+    final idleBytes = sentFrom > idleFrom;
     r.line(
-      'ANSWER (e): a tunnel must ignore server bytes that arrive without an '
-      'HTTP response (see chunks above) — typically the TLS 1.3 '
-      'NewSessionTicket records right after the handshake/first request.',
+      idleBytes || (response == null && tunnel.upstreamChunks.length > sentFrom)
+          ? 'ANSWER (e): the server sends bytes without an HTTP response '
+                '(see chunks above), e.g. TLS 1.3 NewSessionTicket; a tunnel '
+                'must not treat them as a Ping answer.'
+          : 'ANSWER (e): no server bytes without an HTTP response were seen.',
     );
   } finally {
     await tunnel.close();
@@ -506,7 +592,11 @@ class _Tunnel {
       onDone: () => upstream.destroy(),
       onError: (Object _) => upstream.destroy(),
     );
-    final tls = await SecureSocket.secure(local, host: uri.host);
+    final tls = await SecureSocket.secure(
+      local,
+      host: uri.host,
+      onBadCertificate: _insecure ? (_) => true : null,
+    );
     return _Tunnel._(clock, upstream, relay, peer, tls, chunks, clock.elapsed);
   }
 
@@ -543,4 +633,46 @@ class _Tunnel {
     _upstream.destroy();
     await _relay.close();
   }
+}
+
+/// Logs each HTTP exchange to stderr (`--trace`), decoding WBXML bodies.
+/// Never prints the Authorization header or the User query parameter.
+class _TraceClient extends http.BaseClient {
+  final http.Client _inner;
+  _TraceClient(this._inner);
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    final query = Map.of(request.url.queryParameters)..remove('User');
+    stderr.writeln('[trace] >>> ${request.method} ${request.url.path} $query');
+    if (request is http.Request) _dumpBody(request.bodyBytes);
+    final response = await _inner.send(request);
+    final body = await response.stream.toBytes();
+    stderr.writeln('[trace] <<< HTTP ${response.statusCode}');
+    response.headers.forEach((k, v) => stderr.writeln('[trace]     $k: $v'));
+    _dumpBody(body);
+    return http.StreamedResponse(
+      Stream.value(body),
+      response.statusCode,
+      contentLength: body.length,
+      request: response.request,
+      headers: response.headers,
+      isRedirect: response.isRedirect,
+      persistentConnection: response.persistentConnection,
+      reasonPhrase: response.reasonPhrase,
+    );
+  }
+
+  static void _dumpBody(Uint8List bytes) {
+    if (bytes.isEmpty) return;
+    try {
+      stderr.writeln(WbxmlDecoder().decode(bytes));
+    } catch (_) {
+      final n = bytes.length < 2048 ? bytes.length : 2048;
+      stderr.writeln(String.fromCharCodes(bytes.sublist(0, n)));
+    }
+  }
+
+  @override
+  void close() => _inner.close();
 }
